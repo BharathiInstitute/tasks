@@ -53,13 +53,13 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyCIBu4nPLUDTGFpGj-fp7z5Nt_yImtPiig',
-    appId: '1:426524880811:web:fa1d909dad72fd9503ecee',
-    messagingSenderId: '426524880811',
-    projectId: 'tasks',
-    authDomain: 'tasks.firebaseapp.com',
-    storageBucket: 'tasks.firebasestorage.app',
-    measurementId: 'G-40ML72WEFG',
-    databaseURL: 'https://tasks-default-rtdb.firebaseio.com/',
+    apiKey: 'AIzaSyBDPh3tLM8-EeVv0ihO8b6JJdNrJAhfJnQ',
+    appId: '1:938074109660:web:c7da53da8d615ca8bce619',
+    messagingSenderId: '938074109660',
+    projectId: 'nandhu-firelogin',
+    authDomain: 'nandhu-firelogin.firebaseapp.com',
+    storageBucket: 'nandhu-firelogin.firebasestorage.app',
+    measurementId: 'G-5ZRTDZVJZH',
   );
+
 }
