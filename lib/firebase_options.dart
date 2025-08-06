@@ -58,6 +58,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '938074109660',
     projectId: 'nandhu-firelogin',
     authDomain: 'nandhu-firelogin.firebaseapp.com',
+    databaseURL: 'https://nandhu-firelogin-default-rtdb.firebaseio.com/',
     storageBucket: 'nandhu-firelogin.firebasestorage.app',
     measurementId: 'G-5ZRTDZVJZH',
   );
