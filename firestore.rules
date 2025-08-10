@@ -1,0 +1,20 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function isSignedIn() { return request.auth != null; }
+    function role() { return isSignedIn() ? request.auth.token.role : null; }
+    function isAdmin() { return role() == 'admin'; }
+    function isSelf(uid) { return isSignedIn() && request.auth.uid == uid; }
+
+    // Users can read/write their own profile; admins can read/write all
+    match /users/{uid} {
+      allow read, write: if isSelf(uid) || isAdmin();
+    }
+
+    // Core collections - restrict writes to admins; reads require sign-in
+    match /{colName}/{docId} where colName in ['tasks','projects','branches','persons','roleDefs','userPerms','roles'] {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+  }
+}

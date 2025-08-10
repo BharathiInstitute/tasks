@@ -1,1 +1,34 @@
-{"flutter":{"platforms":{"dart":{"lib/firebase_options.dart":{"projectId":"nandhu-firelogin","configurations":{"web":"1:938074109660:web:c7da53da8d615ca8bce619"}}}}}}
+{
+  "flutter": {
+    "platforms": {
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "nandhu-firelogin",
+          "configurations": {
+            "web": "1:938074109660:web:c7da53da8d615ca8bce619"
+          }
+        }
+      }
+    }
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run lint",
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ]
+    }
+  ]
+}
