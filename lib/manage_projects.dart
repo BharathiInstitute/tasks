@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+// ignore_for_file: use_build_context_synchronously
 import 'package:flutter/material.dart';
-import 'responsive.dart';
+import 'permissions.dart';
 
 class ManageProjectsPage extends StatefulWidget {
   const ManageProjectsPage({super.key});
@@ -10,163 +12,272 @@ class ManageProjectsPage extends StatefulWidget {
 }
 
 class _ManageProjectsPageState extends State<ManageProjectsPage> {
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Projects'), backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
-      body: const Padding(
-        padding: EdgeInsets.all(16.0),
-        child: ManageProjectsPanel(),
-      ),
-    );
-  }
-}
+  // No persistent form; dialogs handle add/edit
 
-class ManageProjectsPanel extends StatefulWidget {
-  const ManageProjectsPanel({super.key});
+  bool _permsLoading = true;
+  bool _canView = false;
+  bool _canAdd = false;
+  bool _canEdit = false;
+  bool _canDelete = false;
+  // Horizontal scroll sync controllers (body drives header)
+  late final ScrollController _headerHCtrl;
+  late final ScrollController _bodyHCtrl;
 
   @override
-  State<ManageProjectsPanel> createState() => _ManageProjectsPanelState();
-}
-
-class _ManageProjectsPanelState extends State<ManageProjectsPanel> {
-  final _formKey = GlobalKey<FormState>();
-  final _nameCtrl = TextEditingController();
-  String? _editingId; // null => add, non-null => update docId
-  bool _saving = false;
-
-  Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _saving = true);
-    final data = {'name': _nameCtrl.text.trim()};
-    try {
-      final col = FirebaseFirestore.instance.collection('projects');
-      if (_editingId == null) {
-        await col.add(data);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Project added')));
-      } else {
-        await col.doc(_editingId).update(data);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Project updated')));
+  void initState() {
+    super.initState();
+    _headerHCtrl = ScrollController();
+    _bodyHCtrl = ScrollController();
+    _bodyHCtrl.addListener(() {
+      if (_headerHCtrl.hasClients && _headerHCtrl.offset != _bodyHCtrl.offset) {
+        _headerHCtrl.jumpTo(_bodyHCtrl.offset);
       }
-      _clearForm();
+    });
+    _loadPerms();
+  }
+
+  @override
+  void dispose() {
+    _bodyHCtrl.dispose();
+    _headerHCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadPerms() async {
+    try {
+      final email = (FirebaseAuth.instance.currentUser?.email ?? '').toLowerCase().trim();
+      final allowed = await PermissionsService.fetchAllowedKeysForEmail(email);
+      setState(() {
+        _canView = allowed.contains(PermKeys.projectsView);
+  _canAdd = allowed.contains(PermKeys.projectsAdd) || allowed.contains(PermKeys.projectsEdit);
+  _canEdit = allowed.contains(PermKeys.projectsEdit);
+        _canDelete = allowed.contains(PermKeys.projectsDelete);
+        _permsLoading = false;
+      });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-    } finally {
-      if (mounted) setState(() => _saving = false);
+      setState(() {
+        _permsLoading = false;
+        _canView = false;
+        _canEdit = false;
+        _canDelete = false;
+      });
     }
   }
 
-  void _startEdit(String id, String name) {
-    setState(() {
-      _editingId = id;
-      _nameCtrl.text = name;
-    });
-  }
-
-  void _clearForm() {
-    setState(() {
-      _editingId = null;
-      _nameCtrl.clear();
-    });
+  Future<void> _openProjectDialog({String? id, String? currentName}) async {
+    final isAdd = id == null;
+    if (isAdd && !_canAdd) return;
+    if (!isAdd && !_canEdit) return;
+    final formKey = GlobalKey<FormState>();
+    final ctrl = TextEditingController(text: currentName ?? '');
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(id == null ? 'Add Project' : 'Edit Project'),
+        content: Form(
+          key: formKey,
+          child: TextFormField(
+            controller: ctrl,
+            decoration: const InputDecoration(labelText: 'Project Name'),
+            validator: (v) => v == null || v.trim().isEmpty ? 'Enter project name' : null,
+            autofocus: true,
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              if (!formKey.currentState!.validate()) return;
+              try {
+                final name = ctrl.text.trim();
+                if (id == null) {
+                  await FirebaseFirestore.instance.collection('projects').add({
+                    'name': name,
+                    'createdAt': FieldValue.serverTimestamp(),
+                  });
+                } else {
+                  await FirebaseFirestore.instance.collection('projects').doc(id).update({
+                    'name': name,
+                    'updatedAt': FieldValue.serverTimestamp(),
+                  });
+                }
+                if (mounted) Navigator.pop(ctx, true);
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+                }
+              }
+            },
+            child: Text(id == null ? 'Add' : 'Save'),
+          ),
+        ],
+      ),
+    );
+    if (saved == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(id == null ? 'Project added' : 'Project updated')));
+    }
   }
 
   Future<void> _delete(String id) async {
+    if (!_canDelete) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Project'),
+        content: const Text('Are you sure you want to delete this project?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
     try {
       await FirebaseFirestore.instance.collection('projects').doc(id).delete();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Project deleted')));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error deleting: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete: $e')),
+        );
+      }
     }
+  }
+
+  Widget _headerRow(double width) {
+    return Card(
+      margin: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+      elevation: 1,
+      color: Colors.blue.shade50,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(children: const [
+          Expanded(flex: 2, child: Text('Project', style: TextStyle(fontWeight: FontWeight.w700))),
+          Expanded(child: Text('Created', style: TextStyle(fontWeight: FontWeight.w700))),
+          Expanded(child: Text('Updated', style: TextStyle(fontWeight: FontWeight.w700))),
+          SizedBox(width: 40),
+        ]),
+      ),
+    );
+  }
+
+  Widget _projectRow(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final name = (data['name'] ?? '').toString();
+    final created = (data['createdAt'] is Timestamp)
+        ? (data['createdAt'] as Timestamp).toDate()
+        : (data['createdAt'] is DateTime ? data['createdAt'] as DateTime : null);
+    final updated = (data['updatedAt'] is Timestamp)
+        ? (data['updatedAt'] as Timestamp).toDate()
+        : (data['updatedAt'] is DateTime ? data['updatedAt'] as DateTime : null);
+    String fmt(DateTime? d) => d == null ? '' : '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      elevation: .7,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: _canEdit ? () => _openProjectDialog(id: doc.id, currentName: name) : null,
+        onLongPress: _canDelete
+            ? () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (dCtx) => AlertDialog(
+                    title: const Text('Delete Project'),
+                    content: const Text('Delete this project? This cannot be undone.'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+                      ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: () => Navigator.pop(dCtx, true), child: const Text('Delete')),
+                    ],
+                  ),
+                );
+                if (confirm == true) {
+                  _delete(doc.id);
+                }
+              }
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(children: [
+            Expanded(flex: 2, child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600))),
+            Expanded(child: Text(fmt(created))),
+            Expanded(child: Text(fmt(updated))),
+            const SizedBox(width: 0),
+          ]),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final compact = isCompactWidth(context);
-    return Column(
-      children: [
-        Card(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Padding(
-            padding: const EdgeInsets.all(12.0),
-            child: Form(
-              key: _formKey,
-              child: compact
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        TextFormField(
-                          controller: _nameCtrl,
-                          decoration: InputDecoration(labelText: 'Project Name', border: OutlineInputBorder()),
-                          validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter project name' : null,
-                        ),
-                        SizedBox(height: 12),
-                        Row(children: [
-                          ElevatedButton.icon(
-                            onPressed: _saving ? null : _submit,
-                            icon: Icon(_editingId == null ? Icons.add : Icons.save),
-                            label: Text(_editingId == null ? 'Add' : 'Update'),
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
+    if (_permsLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (!_canView) {
+      return const Center(child: Text('You do not have permission to view Projects.'));
+    }
+
+    return LayoutBuilder(
+        builder: (context, constraints) {
+          const minWidth = 800.0;
+          final width = constraints.maxWidth < minWidth ? minWidth : constraints.maxWidth;
+          return Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+            children: [
+              // Header (position synced)
+              SingleChildScrollView(
+                controller: _headerHCtrl,
+                scrollDirection: Axis.horizontal,
+                physics: const NeverScrollableScrollPhysics(),
+                child: SizedBox(width: width, child: _headerRow(width)),
+              ),
+              Expanded(
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance.collection('projects').orderBy('name').snapshots(),
+                  builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final docs = snap.data?.docs ?? [];
+                    if (docs.isEmpty) return const Center(child: Text('No projects'));
+                    final rows = docs.map(_projectRow).toList();
+                    return Scrollbar(
+                      controller: _bodyHCtrl,
+                      thumbVisibility: true,
+                      child: SingleChildScrollView(
+                        controller: _bodyHCtrl,
+                        scrollDirection: Axis.horizontal,
+                        child: SizedBox(
+                          width: width,
+                          child: ListView.builder(
+                            itemCount: rows.length,
+                            itemBuilder: (c, i) => rows[i],
                           ),
-                          if (_editingId != null) ...[
-                            SizedBox(width: 8),
-                            OutlinedButton(onPressed: _clearForm, child: Text('Cancel')),
-                          ],
-                        ]),
-                      ],
-                    )
-                  : Row(
-                      children: [
-                        Expanded(
-                          child: TextFormField(
-                            controller: _nameCtrl,
-                            decoration: InputDecoration(labelText: 'Project Name', border: OutlineInputBorder()),
-                            validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter project name' : null,
-                          ),
                         ),
-                        SizedBox(width: 12),
-                        ElevatedButton.icon(
-                          onPressed: _saving ? null : _submit,
-                          icon: Icon(_editingId == null ? Icons.add : Icons.save),
-                          label: Text(_editingId == null ? 'Add' : 'Update'),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
-                        ),
-                        if (_editingId != null) ...[
-                          SizedBox(width: 8),
-                          OutlinedButton(onPressed: _clearForm, child: Text('Cancel')),
-                        ],
-                      ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+              if (_canAdd)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12.0),
+                  child: Align(
+                    alignment: Alignment.bottomRight,
+                    child: FloatingActionButton.extended(
+                      heroTag: 'addProjectFab',
+                      onPressed: () => _openProjectDialog(),
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add Project'),
                     ),
-            ),
+                  ),
+                ),
+            ],
           ),
-        ),
-        SizedBox(height: 12),
-        Expanded(
-          child: StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance.collection('projects').orderBy('name').snapshots(),
-            builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) return Center(child: CircularProgressIndicator());
-              final docs = snap.data?.docs ?? [];
-              if (docs.isEmpty) return Center(child: Text('No projects'));
-              return ListView.separated(
-                itemBuilder: (_, i) {
-                  final d = docs[i];
-                  final data = d.data() as Map<String, dynamic>;
-                  final name = (data['name'] ?? '').toString();
-                  return ListTile(
-                    title: Text(name, style: TextStyle(fontWeight: FontWeight.w600)),
-                    trailing: Wrap(spacing: 8, children: [
-                      IconButton(icon: Icon(Icons.edit, color: Colors.orange[700]), onPressed: () => _startEdit(d.id, name)),
-                      IconButton(icon: Icon(Icons.delete, color: Colors.red[700]), onPressed: () => _delete(d.id)),
-                    ]),
-                  );
-                },
-                separatorBuilder: (_, __) => SizedBox(height: 6),
-                itemCount: docs.length,
-              );
-            },
-          ),
-        )
-      ],
-    );
+          );
+        },
+      );
   }
 }

@@ -33,6 +33,10 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <script>
+    // Polyfill for libraries expecting Node's global in browser (Firestore internals in some contexts)
+    if (typeof global === 'undefined') { window.global = window; }
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

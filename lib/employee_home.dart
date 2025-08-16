@@ -1,17 +1,20 @@
+// ignore_for_file: use_build_context_synchronously
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'add_tasks.dart';
+import 'add_tasks_new.dart';
+import 'permissions.dart';
 
 class EmployeeHome extends StatefulWidget {
   final String employeeName;
   const EmployeeHome({super.key, required this.employeeName});
 
   @override
-  _EmployeeHomeState createState() => _EmployeeHomeState();
+  @override
+  EmployeeHomeState createState() => EmployeeHomeState();
 }
 
-class _EmployeeHomeState extends State<EmployeeHome> {
+class EmployeeHomeState extends State<EmployeeHome> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   String? selectedStatus;
   DateTime? startDate;
@@ -33,8 +36,21 @@ class _EmployeeHomeState extends State<EmployeeHome> {
               backgroundColor: const Color.fromARGB(255, 226, 88, 24),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
             ),
-            onPressed: () {
-              showAddTaskDialog(context);
+            onPressed: () async {
+              // Fetch allowed permission keys for current user email (simple reuse of permissions service)
+              final email = FirebaseAuth.instance.currentUser?.email?.toLowerCase() ?? '';
+              Set<String> allowed = {};
+              try {
+                if (email.isNotEmpty) {
+                  allowed = await PermissionsService.fetchAllowedKeysForEmail(email);
+                }
+              } catch (_) {}
+              if (!mounted) return;
+              if (!allowed.contains(PermKeys.tasksAdd)) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No permission to add tasks')));
+                return;
+              }
+              showAddTaskDialog(context, allowed: allowed);
             },
           ),
           IconButton(
@@ -59,11 +75,9 @@ class _EmployeeHomeState extends State<EmployeeHome> {
           final tasks = snapshot.data!.docs.map((doc) => doc.data() as Map<String, dynamic>).toList();
 
           final statuses = [
+            'Working',
             'Pending',
-            'Started',
-            'In Progress',
             'Completed',
-            'On Hold',
           ];
 
           List<Map<String, dynamic>> filtered = tasks.where((task) {
@@ -174,9 +188,18 @@ class _EmployeeHomeState extends State<EmployeeHome> {
                             trailing: task['dueDate'] != null
                                 ? Text('Due: ${DateTime.fromMillisecondsSinceEpoch(task['dueDate']).toLocal().toString().split(' ')[0]}')
                                 : null,
-                            onTap: () {
+                            onTap: () async {
                               // Open add-task popup (edit flow can be added later)
-                              showAddTaskDialog(context);
+                              final email = FirebaseAuth.instance.currentUser?.email?.toLowerCase() ?? '';
+                              Set<String> allowed = {};
+                              try {
+                                if (email.isNotEmpty) {
+                                  allowed = await PermissionsService.fetchAllowedKeysForEmail(email);
+                                }
+                              } catch (_) {}
+                              if (!mounted) return;
+                              if (!allowed.contains(PermKeys.tasksView)) return;
+                              showAddTaskDialog(context, existing: task, allowed: allowed);
                             },
                           );
                         },

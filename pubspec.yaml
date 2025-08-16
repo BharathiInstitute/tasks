@@ -16,6 +16,8 @@ dependencies:
   cloud_functions: ^6.0.0
   google_sign_in: ^7.1.1
   geolocator: ^10.1.0
+  url_launcher: ^6.3.0
+  msix: ^3.16.12
 
 dev_dependencies:
   flutter_test:
@@ -24,3 +26,15 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+msix_config:
+  display_name: "Tasks App"
+  publisher_display_name: "Tasks App Dev"
+  publisher: "CN=Tasks App"
+  identity_name: "com.example.tasksapp"
+  msix_version: "1.0.0.0"
+  logo_path: "windows/runner/resources/app_icon.ico"
+  capabilities: internetClient
+  certificate_path: "C:\\sign\\codesign.pfx"   # updated per request
+  certificate_password: "MyCertPassword123!"
+  install_certificate: false

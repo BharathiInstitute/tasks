@@ -1,6 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'responsive.dart';
+// responsive.dart no longer needed after layout refactor
+// ignore_for_file: use_build_context_synchronously
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'permissions.dart';
 
 class ManageBranchesPage extends StatefulWidget {
   const ManageBranchesPage({super.key});
@@ -12,159 +15,234 @@ class ManageBranchesPage extends StatefulWidget {
 class _ManageBranchesPageState extends State<ManageBranchesPage> {
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Branches'), backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
-      body: const Padding(
-        padding: EdgeInsets.all(16.0),
-        child: ManageBranchesPanel(),
-      ),
+    return FutureBuilder<Set<String>>(
+      future: _loadAllowedOnce(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
+        final allowed = snap.data ?? {};
+        final canView = allowed.contains(PermKeys.branchesView);
+        if (!canView) {
+          return const Scaffold(body: Center(child: Text('You do not have permission to view Branches.')));
+        }
+    final canAdd = allowed.contains(PermKeys.branchesAdd) || allowed.contains(PermKeys.branchesEdit);
+    final canEdit = allowed.contains(PermKeys.branchesEdit);
+        final canDelete = allowed.contains(PermKeys.branchesDelete);
+        // Removed internal AppBar to avoid nested headers; parent screen provides top bar.
+        return Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: ManageBranchesPanel(canAdd: canAdd, canEdit: canEdit, canDelete: canDelete),
+        );
+      },
     );
+  }
+
+  Future<Set<String>> _loadAllowedOnce() async {
+    final email = (FirebaseAuth.instance.currentUser?.email ?? '').toLowerCase().trim();
+    return PermissionsService.fetchAllowedKeysForEmail(email);
   }
 }
 
 class ManageBranchesPanel extends StatefulWidget {
-  const ManageBranchesPanel({super.key});
+  final bool canAdd;
+  final bool canEdit;
+  final bool canDelete;
+  const ManageBranchesPanel({super.key, required this.canAdd, required this.canEdit, required this.canDelete});
 
   @override
   State<ManageBranchesPanel> createState() => _ManageBranchesPanelState();
 }
 
 class _ManageBranchesPanelState extends State<ManageBranchesPanel> {
-  final _formKey = GlobalKey<FormState>();
-  final _nameCtrl = TextEditingController();
-  String? _editingId;
-  bool _saving = false;
+  // Horizontal scroll sync (body -> header)
+  late final ScrollController _headerHCtrl;
+  late final ScrollController _bodyHCtrl;
 
-  Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _saving = true);
-    try {
-      final col = FirebaseFirestore.instance.collection('branches');
-      final data = {'name': _nameCtrl.text.trim()};
-      if (_editingId == null) {
-        await col.add(data);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Branch added')));
-      } else {
-        await col.doc(_editingId).update(data);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Branch updated')));
+  @override
+  void initState() {
+    super.initState();
+    _headerHCtrl = ScrollController();
+    _bodyHCtrl = ScrollController();
+    _bodyHCtrl.addListener(() {
+      if (_headerHCtrl.hasClients && _headerHCtrl.offset != _bodyHCtrl.offset) {
+        _headerHCtrl.jumpTo(_bodyHCtrl.offset);
       }
-      _clear();
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-    } finally {
-      if (mounted) setState(() => _saving = false);
+    });
+  }
+
+  @override
+  void dispose() {
+    _bodyHCtrl.dispose();
+    _headerHCtrl.dispose();
+    super.dispose();
+  }
+  Future<void> _openBranchDialog({String? id, String? currentName}) async {
+  final isAdd = id == null;
+  if (isAdd && !widget.canAdd) return;
+  if (!isAdd && !widget.canEdit) return;
+    final formKey = GlobalKey<FormState>();
+    final ctrl = TextEditingController(text: currentName ?? '');
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(id == null ? 'Add Branch' : 'Edit Branch'),
+        content: Form(
+          key: formKey,
+          child: TextFormField(
+            controller: ctrl,
+            decoration: const InputDecoration(labelText: 'Branch Name'),
+            validator: (v) => v == null || v.trim().isEmpty ? 'Enter branch name' : null,
+            autofocus: true,
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              if (!formKey.currentState!.validate()) return;
+              try {
+                final name = ctrl.text.trim();
+                final col = FirebaseFirestore.instance.collection('branches');
+                if (id == null) {
+                  await col.add({'name': name});
+                } else {
+                  await col.doc(id).update({'name': name});
+                }
+                if (mounted) Navigator.pop(ctx, true);
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+                }
+              }
+            },
+            child: Text(id == null ? 'Add' : 'Save'),
+          ),
+        ],
+      ),
+    );
+    if (saved == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(id == null ? 'Branch added' : 'Branch updated')));
     }
-  }
-
-  void _startEdit(String id, String name) {
-    setState(() {
-      _editingId = id;
-      _nameCtrl.text = name;
-    });
-  }
-
-  void _clear() {
-    setState(() {
-      _editingId = null;
-      _nameCtrl.clear();
-    });
   }
 
   Future<void> _delete(String id) async {
+    if (!widget.canDelete) return;
     try {
       await FirebaseFirestore.instance.collection('branches').doc(id).delete();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Branch deleted')));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error deleting: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      }
     }
+  }
+
+  // Header removed per request.
+  Widget _header() => Card(
+        margin: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+        elevation: 1,
+        color: Colors.blue.shade50,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(children: [
+      Expanded(flex: 3, child: Text('Branch', style: TextStyle(fontWeight: FontWeight.w700)) ),
+            SizedBox(width: 40),
+          ]),
+        ),
+      );
+
+  Widget _row(QueryDocumentSnapshot doc) {
+    final name = (doc['name'] ?? '').toString();
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      elevation: .7,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: widget.canEdit ? () => _openBranchDialog(id: doc.id, currentName: name) : null,
+        onLongPress: widget.canDelete
+            ? () async {
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (dCtx) => AlertDialog(
+                    title: const Text('Delete Branch'),
+                    content: const Text('Delete this branch? This cannot be undone.'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+                      ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: () => Navigator.pop(dCtx, true), child: const Text('Delete')),
+                    ],
+                  ),
+                );
+                if (confirm == true) {
+                  _delete(doc.id);
+                }
+              }
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(children: [
+            Expanded(flex: 3, child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600))),
+            const SizedBox(width: 0)
+          ]),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final compact = isCompactWidth(context);
-    return Column(
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12.0),
-            child: Form(
-              key: _formKey,
-              child: compact
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        TextFormField(
-                          controller: _nameCtrl,
-                          decoration: InputDecoration(labelText: 'Branch Name', border: OutlineInputBorder()),
-                          validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter branch name' : null,
-                        ),
-                        SizedBox(height: 12),
-                        Row(
-                          children: [
-                            ElevatedButton.icon(
-                              onPressed: _saving ? null : _submit,
-                              icon: Icon(_editingId == null ? Icons.add : Icons.save),
-                              label: Text(_editingId == null ? 'Add' : 'Update'),
-                            ),
-                            if (_editingId != null) ...[
-                              SizedBox(width: 8),
-                              OutlinedButton(onPressed: _clear, child: Text('Cancel')),
-                            ]
-                          ],
-                        )
-                      ],
-                    )
-                  : Row(
-                      children: [
-                        Expanded(
-                          child: TextFormField(
-                            controller: _nameCtrl,
-                            decoration: InputDecoration(labelText: 'Branch Name', border: OutlineInputBorder()),
-                            validator: (v) => (v == null || v.trim().isEmpty) ? 'Enter branch name' : null,
-                          ),
-                        ),
-                        SizedBox(width: 12),
-                        ElevatedButton.icon(
-                          onPressed: _saving ? null : _submit,
-                          icon: Icon(_editingId == null ? Icons.add : Icons.save),
-                          label: Text(_editingId == null ? 'Add' : 'Update'),
-                        ),
-                        if (_editingId != null) ...[
-                          SizedBox(width: 8),
-                          OutlinedButton(onPressed: _clear, child: Text('Cancel')),
-                        ]
-                      ],
-                    ),
-            ),
-          ),
+    return LayoutBuilder(builder: (context, constraints) {
+      const minWidth = 500.0;
+      final width = constraints.maxWidth < minWidth ? minWidth : constraints.maxWidth;
+      return Column(children: [
+        // Synced header (not directly scrollable)
+        SingleChildScrollView(
+          controller: _headerHCtrl,
+          scrollDirection: Axis.horizontal,
+          physics: const NeverScrollableScrollPhysics(),
+          child: SizedBox(width: width, child: _header()),
         ),
-        SizedBox(height: 12),
         Expanded(
           child: StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance.collection('branches').orderBy('name').snapshots(),
             builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) return Center(child: CircularProgressIndicator());
+              if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
               final docs = snap.data?.docs ?? [];
-              if (docs.isEmpty) return Center(child: Text('No branches'));
-              return ListView.separated(
-                itemBuilder: (_, i) {
-                  final d = docs[i];
-                  final name = (d['name'] ?? '').toString();
-                  return ListTile(
-                    title: Text(name),
-                    trailing: Wrap(spacing: 8, children: [
-                      IconButton(icon: Icon(Icons.edit, color: Colors.orange[700]), onPressed: () => _startEdit(d.id, name)),
-                      IconButton(icon: Icon(Icons.delete, color: Colors.red[700]), onPressed: () => _delete(d.id)),
-                    ]),
-                  );
-                },
-                separatorBuilder: (_, __) => SizedBox(height: 6),
-                itemCount: docs.length,
+              if (docs.isEmpty) return const Center(child: Text('No branches'));
+              final rows = docs.map(_row).toList();
+              return Scrollbar(
+                controller: _bodyHCtrl,
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                  controller: _bodyHCtrl,
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(
+                    width: width,
+                    child: ListView.builder(
+                      itemCount: rows.length,
+                      itemBuilder: (c, i) => rows[i],
+                    ),
+                  ),
+                ),
               );
             },
           ),
-        )
-      ],
-    );
+        ),
+        if (widget.canAdd)
+          Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: Align(
+              alignment: Alignment.bottomRight,
+              child: FloatingActionButton.extended(
+                heroTag: 'addBranchFab',
+                onPressed: () => _openBranchDialog(),
+                icon: const Icon(Icons.add_business),
+                label: const Text('Add Branch'),
+              ),
+            ),
+          ),
+      ]);
+    });
   }
 }

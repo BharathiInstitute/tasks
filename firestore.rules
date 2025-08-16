@@ -1,20 +1,66 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{db}/documents {
+    // ===== Helper Functions =====
     function isSignedIn() { return request.auth != null; }
-    function role() { return isSignedIn() ? request.auth.token.role : null; }
-    function isAdmin() { return role() == 'admin'; }
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'kehsaram001@gmail.com' ||
+        (exists(/databases/$(db)/documents/roles/$(request.auth.uid)) &&
+          get(/databases/$(db)/documents/roles/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+  // All emails must be stored lowercase in userPerms and templateGoals
+  function permsDoc() { return get(/databases/$(db)/documents/userPerms/$(request.auth.token.email)); }
+    function hasPerm(p) {
+      return isAdmin() || (
+        isSignedIn() && request.auth.token.email != null &&
+  exists(/databases/$(db)/documents/userPerms/$(request.auth.token.email)) &&
+        permsDoc().data.allowed.hasAny([p])
+      );
+    }
     function isSelf(uid) { return isSignedIn() && request.auth.uid == uid; }
 
-    // Users can read/write their own profile; admins can read/write all
+    // ===== Users =====
     match /users/{uid} {
-      allow read, write: if isSelf(uid) || isAdmin();
+      allow read: if isSignedIn() && (isAdmin() || hasPerm('personsView') || isSelf(uid));
+      allow create: if isSelf(uid);
+      allow update: if isSelf(uid) || isAdmin();
+      allow delete: if isAdmin();
     }
 
-    // Core collections - restrict writes to admins; reads require sign-in
-    match /{colName}/{docId} where colName in ['tasks','projects','branches','persons','roleDefs','userPerms','roles'] {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
+    // ===== Tasks (Fully open to authenticated users) =====
+    match /tasks/{taskId} {
+      allow read, create, update, delete: if isSignedIn();
     }
+
+    // ===== Projects / Branches / Persons =====
+    // Simplify: allow all signed-in users to read shared reference data; restrict writes to admins only.
+  match /projects/{id} { allow read, create, update, delete: if isSignedIn(); }
+  match /branches/{id} { allow read, create, update, delete: if isSignedIn(); }
+  match /persons/{id} { allow read, create, update, delete: if isSignedIn(); }
+
+    // ===== Template Goals (reuse branches permissions) =====
+    match /templateGoals/{id} {
+      allow read, create, update, delete: if isSignedIn();
+      // Subcollection: workLogs
+      match /workLogs/{wid} {
+        allow read, create, update, delete: if isSignedIn();
+      }
+    }
+
+    // User aggregated work logs
+  match /userWorkLogs/{logId} { allow read, create, update, delete: if isSignedIn(); }
+
+    // ===== Role & Permission Definitions =====
+  match /roleDefs/{id} { allow read, write: if isSignedIn(); }
+  match /userPerms/{id} { allow read, write: if isSignedIn(); }
+  match /roles/{uid} { allow read, write: if isSignedIn(); }
+
+    // ===== Attendance =====
+  match /attendance/{id} { allow read, create, update, delete: if isSignedIn(); match /{sub=**} { allow read, write: if isSignedIn(); } }
+
+    // ===== Leave Requests =====
+  match /leave_requests/{id} { allow read, create, update, delete: if isSignedIn(); }
   }
 }

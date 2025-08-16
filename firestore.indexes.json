@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "userWorkLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "email", "order": "ASCENDING" },
+        { "fieldPath": "ts", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

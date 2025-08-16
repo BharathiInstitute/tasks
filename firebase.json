@@ -1,18 +1,7 @@
 {
-  "flutter": {
-    "platforms": {
-      "dart": {
-        "lib/firebase_options.dart": {
-          "projectId": "nandhu-firelogin",
-          "configurations": {
-            "web": "1:938074109660:web:c7da53da8d615ca8bce619"
-          }
-        }
-      }
-    }
-  },
   "firestore": {
-    "rules": "firestore.rules"
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
   },
   "functions": [
     {
@@ -30,5 +19,24 @@
         "npm --prefix \"$RESOURCE_DIR\" run build"
       ]
     }
-  ]
+  ],
+  "hosting": {
+    "public": "build/web",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [{ "source": "**", "destination": "/index.html" }],
+    "headers": [
+      {
+        "source": "**/*.@(jpg|jpeg|gif|png|svg|webp|css|eot|otf|ttf|ttc|woff|woff2|font.css)",
+        "headers": [{ "key": "Cache-Control", "value": "max-age=3600,s-maxage=604800" }]
+      },
+      {
+        "source": "**/*.@(mjs|js|wasm|json)",
+        "headers": [{ "key": "Cache-Control", "value": "max-age=0,s-maxage=604800" }]
+      },
+      {
+        "source": "**/*.html",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      }
+    ]
+  }
 }

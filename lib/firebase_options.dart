@@ -21,30 +21,15 @@ class DefaultFirebaseOptions {
     }
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for android - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+  return android; // TEMP stub – run `flutterfire configure` to replace
       case TargetPlatform.iOS:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for ios - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+  return ios; // TEMP stub
       case TargetPlatform.macOS:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for macos - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+  return macos; // TEMP stub
       case TargetPlatform.windows:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for windows - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+  return windows; // Added for desktop build
       case TargetPlatform.linux:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for linux - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+  return linux; // TEMP stub
       default:
         throw UnsupportedError(
           'DefaultFirebaseOptions are not supported for this platform.',
@@ -61,6 +46,52 @@ class DefaultFirebaseOptions {
     databaseURL: 'https://nandhu-firelogin-default-rtdb.firebaseio.com/',
     storageBucket: 'nandhu-firelogin.firebasestorage.app',
     measurementId: 'G-5ZRTDZVJZH',
+  );
+
+  // ---- TEMP STUB CONFIGS FOR DESKTOP / MOBILE ----
+  // Replace by running: flutterfire configure --platforms=android,ios,macos,windows,linux,web
+  // Using same web values (may NOT work fully for native SDKs). Provided only to allow build.
+  static const FirebaseOptions android = FirebaseOptions(
+    apiKey: 'AIzaSyBDPh3tLM8-EeVv0ihO8b6JJdNrJAhfJnQ',
+    appId: '1:938074109660:android:stubbed',
+    messagingSenderId: '938074109660',
+    projectId: 'nandhu-firelogin',
+    databaseURL: 'https://nandhu-firelogin-default-rtdb.firebaseio.com/',
+    storageBucket: 'nandhu-firelogin.firebasestorage.app',
+  );
+  static const FirebaseOptions ios = FirebaseOptions(
+    apiKey: 'AIzaSyBDPh3tLM8-EeVv0ihO8b6JJdNrJAhfJnQ',
+    appId: '1:938074109660:ios:stubbed',
+    messagingSenderId: '938074109660',
+    projectId: 'nandhu-firelogin',
+    databaseURL: 'https://nandhu-firelogin-default-rtdb.firebaseio.com/',
+    storageBucket: 'nandhu-firelogin.firebasestorage.app',
+    iosBundleId: 'com.example.stub',
+  );
+  static const FirebaseOptions macos = FirebaseOptions(
+    apiKey: 'AIzaSyBDPh3tLM8-EeVv0ihO8b6JJdNrJAhfJnQ',
+    appId: '1:938074109660:macos:stubbed',
+    messagingSenderId: '938074109660',
+    projectId: 'nandhu-firelogin',
+    databaseURL: 'https://nandhu-firelogin-default-rtdb.firebaseio.com/',
+    storageBucket: 'nandhu-firelogin.firebasestorage.app',
+    iosBundleId: 'com.example.stub',
+  );
+  static const FirebaseOptions windows = FirebaseOptions(
+    apiKey: 'AIzaSyBDPh3tLM8-EeVv0ihO8b6JJdNrJAhfJnQ',
+    appId: '1:938074109660:windows:stubbed',
+    messagingSenderId: '938074109660',
+    projectId: 'nandhu-firelogin',
+    databaseURL: 'https://nandhu-firelogin-default-rtdb.firebaseio.com/',
+    storageBucket: 'nandhu-firelogin.firebasestorage.app',
+  );
+  static const FirebaseOptions linux = FirebaseOptions(
+    apiKey: 'AIzaSyBDPh3tLM8-EeVv0ihO8b6JJdNrJAhfJnQ',
+    appId: '1:938074109660:linux:stubbed',
+    messagingSenderId: '938074109660',
+    projectId: 'nandhu-firelogin',
+    databaseURL: 'https://nandhu-firelogin-default-rtdb.firebaseio.com/',
+    storageBucket: 'nandhu-firelogin.firebasestorage.app',
   );
 
 }

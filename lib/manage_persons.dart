@@ -1,7 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+// ignore_for_file: use_build_context_synchronously
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import 'responsive.dart';
+// unified layout imports
+import 'package:firebase_auth/firebase_auth.dart';
+import 'permissions.dart';
 
 class ManagePersonsPage extends StatefulWidget {
   const ManagePersonsPage({super.key});
@@ -13,262 +17,138 @@ class ManagePersonsPage extends StatefulWidget {
 class _ManagePersonsPageState extends State<ManagePersonsPage> {
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Persons'), backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
-      body: const Padding(
-        padding: EdgeInsets.all(16.0),
-        child: ManagePersonsPanel(),
-      ),
+    return FutureBuilder<Set<String>>(
+      future: _loadAllowedOnce(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
+        final allowed = snap.data ?? {};
+        final canView = allowed.contains(PermKeys.personsView);
+        if (!canView) {
+          return const Scaffold(body: Center(child: Text('You do not have permission to view Persons.')));
+        }
+    final canAdd = allowed.contains(PermKeys.personsAdd) || allowed.contains(PermKeys.personsEdit); // allow edit implies add
+    final canEdit = allowed.contains(PermKeys.personsEdit);
+        final canDelete = allowed.contains(PermKeys.personsDelete);
+        // Removed internal AppBar (navigation bar) per request; parent screen provides top bar.
+        return Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: ManagePersonsPanel(canAdd: canAdd, canEdit: canEdit, canDelete: canDelete),
+        );
+      },
     );
+  }
+
+  Future<Set<String>> _loadAllowedOnce() async {
+    final email = (FirebaseAuth.instance.currentUser?.email ?? '').toLowerCase().trim();
+    return PermissionsService.fetchAllowedKeysForEmail(email);
   }
 }
 
 class ManagePersonsPanel extends StatefulWidget {
-  const ManagePersonsPanel({super.key});
+  final bool canAdd;
+  final bool canEdit;
+  final bool canDelete;
+  const ManagePersonsPanel({super.key, required this.canAdd, required this.canEdit, required this.canDelete});
 
   @override
   State<ManagePersonsPanel> createState() => _ManagePersonsPanelState();
 }
 
 class _ManagePersonsPanelState extends State<ManagePersonsPanel> {
-  final _formKey = GlobalKey<FormState>();
-  final _nameCtrl = TextEditingController();
-  final _emailCtrl = TextEditingController();
-  final _phoneCtrl = TextEditingController();
-  final _passwordCtrl = TextEditingController();
-  String? _branch;
-  String? _role = 'Other';
-  String? _editingId;
-  bool _saving = false;
-
-  List<String> _roles = [];
-  List<String> _branches = [];
+  // Horizontal scroll sync (body drives header)
+  late final ScrollController _headerHCtrl;
+  late final ScrollController _bodyHCtrl;
 
   @override
   void initState() {
     super.initState();
-    _loadBranches();
-  _loadRoles();
-  }
-
-  Future<void> _loadBranches() async {
-    try {
-      final snap = await FirebaseFirestore.instance.collection('branches').get();
-      setState(() {
-        _branches = snap.docs.map((d) => (d['name'] ?? '').toString()).where((e) => e.isNotEmpty).toList();
-        if (_branches.isNotEmpty) _branch ??= _branches.first;
-      });
-    } catch (_) {}
-  }
-
-  Future<void> _loadRoles() async {
-    try {
-      final snap = await FirebaseFirestore.instance.collection('roles').orderBy('name').get();
-      setState(() {
-        _roles = snap.docs
-            .map((d) => (d['name'] ?? '').toString())
-            .where((e) => e.isNotEmpty)
-            .toList();
-        if (_roles.isNotEmpty && (_role == null || !_roles.contains(_role))) {
-          _role = _roles.first;
-        }
-      });
-    } catch (_) {}
-  }
-
-  Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    if (_branch == null || _role == null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Select branch and role')));
-      return;
-    }
-    setState(() => _saving = true);
-    final col = FirebaseFirestore.instance.collection('persons');
-    final data = {
-      'name': _nameCtrl.text.trim(),
-      'email': _emailCtrl.text.trim(),
-      'phone': _phoneCtrl.text.trim(),
-      'branch': _branch,
-      'role': _role,
-      'updatedAt': DateTime.now().millisecondsSinceEpoch,
-    };
-    try {
-      // Create or update Firebase Auth user using a callable function (admin privileges required)
-      final email = _emailCtrl.text.trim();
-  final functions = FirebaseFunctions.instanceFor(region: 'asia-south1');
-  final callable = functions.httpsCallable('adminUpsertUser');
-      final payload = {
-        'email': email,
-        'displayName': _nameCtrl.text.trim(),
-        'phoneNumber': _phoneCtrl.text.trim(),
-      };
-      final pw = _passwordCtrl.text;
-      if (pw.isNotEmpty) payload['password'] = pw; // optional on update
-      if (email.isNotEmpty) {
-        await callable.call(payload);
+    _headerHCtrl = ScrollController();
+    _bodyHCtrl = ScrollController();
+    _bodyHCtrl.addListener(() {
+      if (_headerHCtrl.hasClients && _headerHCtrl.offset != _bodyHCtrl.offset) {
+        _headerHCtrl.jumpTo(_bodyHCtrl.offset);
       }
-      if (_editingId == null) {
-        await col.add({...data, 'createdAt': DateTime.now().millisecondsSinceEpoch});
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Person added')));
-      } else {
-        await col.doc(_editingId).update(data);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Person updated')));
-      }
-      _clear();
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  void _startEdit(QueryDocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
-    setState(() {
-      _editingId = doc.id;
-      _nameCtrl.text = (data['name'] ?? '').toString();
-      _emailCtrl.text = (data['email'] ?? '').toString();
-      _phoneCtrl.text = (data['phone'] ?? '').toString();
-      _branch = (data['branch'] ?? '').toString();
-      _role = (data['role'] ?? 'Other').toString();
     });
-  }
-
-  void _clear() {
-    setState(() {
-      _editingId = null;
-      _nameCtrl.clear();
-      _emailCtrl.clear();
-      _phoneCtrl.clear();
-  _passwordCtrl.clear();
-      // keep last selected branch/role
-    });
-  }
-
-  Future<void> _delete(String id) async {
-    try {
-      await FirebaseFirestore.instance.collection('persons').doc(id).delete();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Person deleted')));
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error deleting: $e')));
-    }
   }
 
   @override
-  Widget build(BuildContext context) {
-    final compact = isCompactWidth(context);
-    final roleItems = <DropdownMenuItem<String>>[
-      if (_role != null && !_roles.contains(_role))
-        DropdownMenuItem<String>(value: _role, child: Text('${_role!} (missing)')),
-      ..._roles.map((r) => DropdownMenuItem<String>(value: r, child: Text(r))).toList(),
-    ];
-    return Column(
-      children: [
-        Card(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Padding(
-            padding: const EdgeInsets.all(12.0),
+  void dispose() {
+    _bodyHCtrl.dispose();
+    _headerHCtrl.dispose();
+    super.dispose();
+  }
+  Future<void> _openPersonDialog({String? id}) async {
+  final isAdd = id == null;
+  if (isAdd && !widget.canAdd) return; // cannot add
+  if (!isAdd && !widget.canEdit) return; // cannot edit existing
+    final formKey = GlobalKey<FormState>();
+    final nameCtrl = TextEditingController();
+    final emailCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+    final passwordCtrl = TextEditingController();
+    String? branchId;
+    if (id != null) {
+      final doc = await FirebaseFirestore.instance.collection('persons').doc(id).get();
+      final data = doc.data();
+      if (data != null) {
+        nameCtrl.text = (data['name'] ?? '').toString();
+        emailCtrl.text = (data['email'] ?? '').toString();
+        phoneCtrl.text = (data['phone'] ?? '').toString();
+        branchId = data['branchId'];
+      }
+    }
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setM) {
+        return AlertDialog(
+          title: Text(id == null ? 'Add Person' : 'Edit Person'),
+          content: SizedBox(
+            width: 460,
             child: Form(
-              key: _formKey,
-              child: Column(
-                children: [
-                  if (!compact) ...[
-                    Row(children: [
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          value: _role,
-                          decoration: InputDecoration(labelText: 'Role', border: OutlineInputBorder()),
-                          items: roleItems,
-                          onChanged: _roles.isEmpty ? null : (v) => setState(() => _role = v),
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          value: _branch,
-                          decoration: InputDecoration(labelText: 'Branch', border: OutlineInputBorder()),
-                          items: _branches.map((b) => DropdownMenuItem(value: b, child: Text(b))).toList(),
-                          onChanged: (v) => setState(() => _branch = v),
-                        ),
-                      ),
-                    ]),
-                    SizedBox(height: 12),
-                    Row(children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: _nameCtrl,
-                          decoration: InputDecoration(labelText: 'Name', border: OutlineInputBorder()),
-                          validator: (v) => v == null || v.trim().isEmpty ? 'Enter name' : null,
-                          textCapitalization: TextCapitalization.words,
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: TextFormField(
-                          controller: _emailCtrl,
-                          decoration: InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
-                          keyboardType: TextInputType.emailAddress,
-                          validator: (v) {
-                            if (v == null || v.trim().isEmpty) return 'Enter email';
-                            if (!v.contains('@') || !v.contains('.')) return 'Enter valid email';
-                            return null;
-                          },
-                        ),
-                      ),
-                    ]),
-                    SizedBox(height: 12),
-                    Row(children: [
-                      Expanded(
-                        child: TextFormField(
-                          controller: _phoneCtrl,
-                          decoration: InputDecoration(labelText: 'Phone', border: OutlineInputBorder()),
-                          keyboardType: TextInputType.phone,
-                          validator: (v) => v == null || v.trim().length < 10 ? 'Enter valid phone' : null,
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: TextFormField(
-                          controller: _passwordCtrl,
-                          decoration: InputDecoration(labelText: 'Password (Auth only, not stored)', border: OutlineInputBorder()),
-                          obscureText: true,
-                          enableSuggestions: false,
-                          autocorrect: false,
-                          validator: (v) {
-                            if (_editingId == null) {
-                              // On create require a password
-                              if (v == null || v.length < 6) return 'Min 6 chars';
-                            }
-                            return null;
-                          },
-                        ),
-                      ),
-                    ]),
-                  ] else ...[
-                    DropdownButtonFormField<String>(
-                      value: _role,
-                      decoration: InputDecoration(labelText: 'Role', border: OutlineInputBorder()),
-                      items: roleItems,
-                      onChanged: _roles.isEmpty ? null : (v) => setState(() => _role = v),
+              key: formKey,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Branch first
+                    StreamBuilder<QuerySnapshot>(
+                      stream: FirebaseFirestore.instance.collection('branches').orderBy('name').snapshots(),
+                      builder: (context, snap) {
+                        final docs = snap.data?.docs ?? [];
+                        return DropdownButtonFormField<String?>(
+                          value: branchId,
+                          items: [
+                            const DropdownMenuItem<String?>(value: null, child: Text('No Branch')),
+                            ...docs.map((d) => DropdownMenuItem<String?>(value: d.id, child: Text((d['name'] ?? '').toString()))),
+                          ],
+                          onChanged: (v) => setM(() => branchId = v),
+                          decoration: const InputDecoration(labelText: 'Branch'),
+                        );
+                      },
                     ),
-                    SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      value: _branch,
-                      decoration: InputDecoration(labelText: 'Branch', border: OutlineInputBorder()),
-                      items: _branches.map((b) => DropdownMenuItem(value: b, child: Text(b))).toList(),
-                      onChanged: (v) => setState(() => _branch = v),
-                    ),
-                    SizedBox(height: 12),
+                    const SizedBox(height: 12),
+                    // Name
                     TextFormField(
-                      controller: _nameCtrl,
-                      decoration: InputDecoration(labelText: 'Name', border: OutlineInputBorder()),
+                      controller: nameCtrl,
+                      decoration: const InputDecoration(labelText: 'Name'),
                       validator: (v) => v == null || v.trim().isEmpty ? 'Enter name' : null,
-                      textCapitalization: TextCapitalization.words,
+                      autofocus: true,
                     ),
-                    SizedBox(height: 12),
+                    const SizedBox(height: 12),
+                    // Phone (number) before Email per request
                     TextFormField(
-                      controller: _emailCtrl,
-                      decoration: InputDecoration(labelText: 'Email', border: OutlineInputBorder()),
+                      controller: phoneCtrl,
+                      decoration: const InputDecoration(labelText: 'Phone'),
+                      keyboardType: TextInputType.phone,
+                      validator: (v) => v == null || v.trim().length < 7 ? 'Enter phone' : null,
+                    ),
+                    const SizedBox(height: 12),
+                    // Email
+                    TextFormField(
+                      controller: emailCtrl,
+                      decoration: const InputDecoration(labelText: 'Email'),
                       keyboardType: TextInputType.emailAddress,
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) return 'Enter email';
@@ -276,80 +156,230 @@ class _ManagePersonsPanelState extends State<ManagePersonsPanel> {
                         return null;
                       },
                     ),
-                    SizedBox(height: 12),
+                    const SizedBox(height: 12),
+                    // Password last
                     TextFormField(
-                      controller: _phoneCtrl,
-                      decoration: InputDecoration(labelText: 'Phone', border: OutlineInputBorder()),
-                      keyboardType: TextInputType.phone,
-                      validator: (v) => v == null || v.trim().length < 10 ? 'Enter valid phone' : null,
-                    ),
-                    SizedBox(height: 12),
-                    TextFormField(
-                      controller: _passwordCtrl,
-                      decoration: InputDecoration(labelText: 'Password (Auth only, not stored)', border: OutlineInputBorder()),
+                      controller: passwordCtrl,
+                      decoration: InputDecoration(labelText: id == null ? 'Password' : 'Password (leave blank to keep)'),
                       obscureText: true,
                       enableSuggestions: false,
                       autocorrect: false,
                       validator: (v) {
-                        if (_editingId == null) {
+                        if (id == null) {
                           if (v == null || v.length < 6) return 'Min 6 chars';
+                        } else {
+                          if (v != null && v.isNotEmpty && v.length < 6) return 'Min 6 chars';
                         }
                         return null;
                       },
                     ),
                   ],
-                  SizedBox(height: 12),
-                  Row(children: [
-                    ElevatedButton.icon(
-                      onPressed: _saving ? null : _submit,
-                      icon: Icon(_editingId == null ? Icons.add : Icons.save),
-                      label: Text(_editingId == null ? 'Add' : 'Update'),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blue[600], foregroundColor: Colors.white),
-                    ),
-                    if (_editingId != null) ...[
-                      SizedBox(width: 8),
-                      OutlinedButton(onPressed: _clear, child: Text('Cancel')),
-                    ],
-                  ])
-                ],
+                ),
               ),
             ),
           ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                if (!formKey.currentState!.validate()) return;
+                try {
+                  // Upsert Auth user via callable Cloud Function
+                  final callable = FirebaseFunctions.instanceFor(region: 'asia-south1').httpsCallable('adminUpsertUser');
+                  final pw = passwordCtrl.text.trim();
+                  try {
+                    await callable.call({
+                      'email': emailCtrl.text.trim().toLowerCase(),
+                      if (pw.isNotEmpty) 'password': pw,
+                      'displayName': nameCtrl.text.trim(),
+                    });
+                  } on FirebaseFunctionsException catch (fe) {
+                    if (kDebugMode) {
+                      debugPrint('Functions error code=${fe.code} message=${fe.message} details=${fe.details}');
+                    }
+                    rethrow;
+                  }
+
+                  final data = {
+                    'name': nameCtrl.text.trim(),
+                    'email': emailCtrl.text.trim().toLowerCase(),
+                    'phone': phoneCtrl.text.trim(),
+                    'branchId': branchId,
+                    'updatedAt': FieldValue.serverTimestamp(),
+                    if (id == null) 'createdAt': FieldValue.serverTimestamp(),
+                  };
+                  final col = FirebaseFirestore.instance.collection('persons');
+                  if (id == null) {
+                    await col.add(data);
+                  } else {
+                    await col.doc(id).set(data, SetOptions(merge: true));
+                  }
+                  if (mounted) Navigator.pop(ctx, true);
+        } catch (e) {
+                  if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+                  }
+                }
+              },
+              child: Text(id == null ? 'Add' : 'Save'),
+            ),
+          ],
+        );
+      }),
+    );
+    if (saved == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(id == null ? 'Person added' : 'Person updated')));
+    }
+  }
+
+  Future<void> _delete(String id) async {
+    if (!widget.canDelete) return;
+    try {
+      await FirebaseFirestore.instance.collection('persons').doc(id).delete();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      }
+    }
+  }
+
+  Widget _header() => Card(
+        margin: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+        elevation: 1,
+        color: Colors.blue.shade50,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(children: [
+            Expanded(flex: 2, child: Text('Name', style: TextStyle(fontWeight: FontWeight.w700))),
+            Expanded(flex: 3, child: Text('Email', style: TextStyle(fontWeight: FontWeight.w700))),
+            Expanded(flex: 2, child: Text('Phone', style: TextStyle(fontWeight: FontWeight.w700))),
+            Expanded(flex: 2, child: Text('Branch', style: TextStyle(fontWeight: FontWeight.w700))),
+            Expanded(flex: 2, child: Text('Created', style: TextStyle(fontWeight: FontWeight.w700))),
+            SizedBox(width: 80),
+          ]),
         ),
-        SizedBox(height: 12),
+      );
+
+  String _fmtTs(dynamic v) {
+    if (v is Timestamp) {
+      final d = v.toDate();
+      return '${d.year.toString().padLeft(4,'0')}-${d.month.toString().padLeft(2,'0')}-${d.day.toString().padLeft(2,'0')}';
+    }
+    return '—';
+  }
+
+  Widget _row(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final name = (data['name'] ?? '').toString();
+    final email = (data['email'] ?? '').toString();
+    final phone = (data['phone'] ?? '').toString();
+    final branchId = data['branchId'];
+    final createdAt = _fmtTs(data['createdAt']);
+    final updatedAtRaw = data['updatedAt'];
+    return StreamBuilder<DocumentSnapshot>(
+      stream: branchId == null ? null : FirebaseFirestore.instance.collection('branches').doc(branchId).snapshots(),
+      builder: (context, snap) {
+        final branchName = branchId == null
+            ? '—'
+            : (snap.data != null && snap.data!.data() != null)
+                ? ((snap.data!['name'] ?? '').toString())
+                : '...';
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          elevation: .7,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: widget.canEdit ? () => _openPersonDialog(id: doc.id) : null,
+            onLongPress: widget.canDelete
+                ? () async {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (dCtx) => AlertDialog(
+                        title: const Text('Delete Person'),
+                        content: const Text('Delete this person? This cannot be undone.'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(dCtx, false), child: const Text('Cancel')),
+                          ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.red), onPressed: () => Navigator.pop(dCtx, true), child: const Text('Delete')),
+                        ],
+                      ),
+                    );
+                    if (confirm == true) {
+                      _delete(doc.id);
+                    }
+                  }
+                : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(children: [
+                Expanded(flex: 2, child: Text(name, style: const TextStyle(fontWeight: FontWeight.w600))),
+                Expanded(flex: 3, child: Text(email)),
+                Expanded(flex: 2, child: Text(phone.isEmpty ? '—' : phone)),
+                Expanded(flex: 2, child: Text(branchName)),
+                Expanded(flex: 2, child: Tooltip(message: updatedAtRaw is Timestamp ? 'Updated ${_fmtTs(updatedAtRaw)}' : 'No updates', child: Text(createdAt))),
+                const SizedBox(width: 0), // placeholder to preserve layout height
+              ]),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+  const minWidth = 1100.0;
+      final width = constraints.maxWidth < minWidth ? minWidth : constraints.maxWidth;
+      return Column(children: [
+        // Synced header (non-scrollable directly)
+        SingleChildScrollView(
+          controller: _headerHCtrl,
+          scrollDirection: Axis.horizontal,
+          physics: const NeverScrollableScrollPhysics(),
+          child: SizedBox(width: width, child: _header()),
+        ),
         Expanded(
           child: StreamBuilder<QuerySnapshot>(
             stream: FirebaseFirestore.instance.collection('persons').orderBy('name').snapshots(),
             builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) return Center(child: CircularProgressIndicator());
+              if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
               final docs = snap.data?.docs ?? [];
-              if (docs.isEmpty) return Center(child: Text('No persons'));
-              return ListView.separated(
-                itemBuilder: (_, i) {
-                  final d = docs[i];
-                  final data = d.data() as Map<String, dynamic>;
-                  final name = (data['name'] ?? '').toString();
-                  final email = (data['email'] ?? '').toString();
-                  final phone = (data['phone'] ?? '').toString();
-                  final branch = (data['branch'] ?? '').toString();
-                  final role = (data['role'] ?? '').toString();
-                  return ListTile(
-                    leading: CircleAvatar(child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?')),
-                    title: Text(name, style: TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text('$email • $phone • $branch • $role'),
-                    trailing: Wrap(spacing: 8, children: [
-                      IconButton(icon: Icon(Icons.edit, color: Colors.orange[700]), onPressed: () => _startEdit(d)),
-                      IconButton(icon: Icon(Icons.delete, color: Colors.red[700]), onPressed: () => _delete(d.id)),
-                    ]),
-                  );
-                },
-                separatorBuilder: (_, __) => SizedBox(height: 6),
-                itemCount: docs.length,
+              if (docs.isEmpty) return const Center(child: Text('No persons'));
+              final rows = docs.map(_row).toList();
+              return Scrollbar(
+                controller: _bodyHCtrl,
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                  controller: _bodyHCtrl,
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(
+                    width: width,
+                    child: ListView.builder(
+                      itemCount: rows.length,
+                      itemBuilder: (c, i) => rows[i],
+                    ),
+                  ),
+                ),
               );
             },
           ),
-        )
-      ],
-    );
+        ),
+  if (widget.canAdd)
+          Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: Align(
+              alignment: Alignment.bottomRight,
+              child: FloatingActionButton.extended(
+                heroTag: 'addPersonFab',
+                onPressed: () => _openPersonDialog(),
+                icon: const Icon(Icons.person_add),
+                label: const Text('Add Person'),
+              ),
+            ),
+          )
+      ]);
+    });
   }
 }

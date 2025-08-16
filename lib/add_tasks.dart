@@ -1,3 +1,4 @@
+// ignore_for_file: use_build_context_synchronously
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -9,14 +10,14 @@ Future<void> showAddTaskDialog(BuildContext context) async {
   String? selectedProject;
   String? selectedBranch;
   String? selectedPerson;
-  String selectedStatus = 'Todo';
+  String selectedStatus = 'Pending';
   String selectedPriority = 'Medium';
   DateTime? selectedDueDate;
   List<String> projectOptions = [];
   List<String> branchOptions = [];
   List<String> personOptions = [];
-  final List<String> statusOptions = ['Todo', 'In Progress', 'Blocked', 'Done'];
-  final List<String> priorityOptions = ['Low', 'Medium', 'High', 'Urgent'];
+  final List<String> statusOptions = ['Working', 'Pending', 'Completed'];
+  final List<String> priorityOptions = ['Urgent', 'Medium', 'Low'];
 
   // Load initial dropdown data
   final projectSnap = await FirebaseFirestore.instance.collection('projects').get();
@@ -47,7 +48,7 @@ Future<void> showAddTaskDialog(BuildContext context) async {
             titlePadding: EdgeInsets.fromLTRB(24, 20, 12, 0),
             title: Row(
               children: [
-                Expanded(child: Text('New Task', style: TextStyle(fontWeight: FontWeight.w600))),
+                Expanded(child: Text('Task', style: TextStyle(fontWeight: FontWeight.w600))),
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
                   child: Text('Close'),
@@ -100,7 +101,7 @@ Future<void> showAddTaskDialog(BuildContext context) async {
                           child: TextField(
                             controller: nameController,
                             decoration: InputDecoration(
-                              labelText: 'Title',
+                              labelText: 'Task',
                               hintText: 'e.g., Create Firestore indexes',
                               border: OutlineInputBorder(),
                             ),

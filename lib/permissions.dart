@@ -12,6 +12,7 @@ class PermKeys {
   static const String branches = 'branches';
   static const String attendance = 'attendance';
   static const String leaves = 'leaves';
+  // static const String roles = 'roles'; // removed UI usage
 
   // New action-based permissions per module
   static const String homeView = 'homeView';
@@ -19,26 +20,35 @@ class PermKeys {
   static const String homeDelete = 'homeDelete';
 
   static const String projectsView = 'projectsView';
+  static const String projectsAdd = 'projectsAdd';
   static const String projectsEdit = 'projectsEdit';
   static const String projectsDelete = 'projectsDelete';
 
   static const String personsView = 'personsView';
+  static const String personsAdd = 'personsAdd';
   static const String personsEdit = 'personsEdit';
   static const String personsDelete = 'personsDelete';
 
   static const String branchesView = 'branchesView';
+  static const String branchesAdd = 'branchesAdd';
   static const String branchesEdit = 'branchesEdit';
   static const String branchesDelete = 'branchesDelete';
 
-  static const String attendanceView = 'attendanceView';
-  static const String attendanceEdit = 'attendanceEdit';
-  static const String attendanceDelete = 'attendanceDelete';
+  // Attendance & Leaves base access now granted to all users; keep only approve key.
+  static const String attendanceView = 'attendanceView'; // retained for backward compat (ignored)
+  static const String attendanceEdit = 'attendanceEdit'; // unused
+  static const String attendanceDelete = 'attendanceDelete'; // unused
 
-  static const String leavesView = 'leavesView';
-  static const String leavesEdit = 'leavesEdit';
-  static const String leavesDelete = 'leavesDelete';
+  static const String leavesView = 'leavesView'; // retained for backward compat (ignored)
+  static const String leavesEdit = 'leavesEdit'; // unused
+  static const String leavesDelete = 'leavesDelete'; // unused
+  static const String leavesApprove = 'leavesApprove';
+
+  // Roles module permissions
+  // Roles module permissions removed
 
   static const String tasksView = 'tasksView';
+  static const String tasksAdd = 'tasksAdd';
   static const String tasksEdit = 'tasksEdit';
   static const String tasksDelete = 'tasksDelete';
   // Task field-level edit permissions
@@ -50,6 +60,8 @@ class PermKeys {
   static const String taskEditBranch = 'taskEditBranch';
   static const String taskEditAssignee = 'taskEditAssignee';
   static const String taskEditDueDate = 'taskEditDueDate';
+  // Separate filter visibility permissions
+  static const String branchFilterView = 'branchFilterView';
 }
 
 class PermissionsService {
@@ -83,16 +95,18 @@ class PermissionsService {
         PermKeys.projects,
         PermKeys.persons,
         PermKeys.branches,
-        PermKeys.attendance,
-        PermKeys.leaves,
+  PermKeys.attendance,
+  PermKeys.leaves,
         // View/Edit/Delete for all modules
         PermKeys.homeView, PermKeys.homeEdit, PermKeys.homeDelete,
         PermKeys.projectsView, PermKeys.projectsEdit, PermKeys.projectsDelete,
-        PermKeys.personsView, PermKeys.personsEdit, PermKeys.personsDelete,
-        PermKeys.branchesView, PermKeys.branchesEdit, PermKeys.branchesDelete,
-        PermKeys.attendanceView, PermKeys.attendanceEdit, PermKeys.attendanceDelete,
-        PermKeys.leavesView, PermKeys.leavesEdit, PermKeys.leavesDelete,
+  PermKeys.projectsAdd,
+  PermKeys.personsView, PermKeys.personsEdit, PermKeys.personsDelete, PermKeys.personsAdd,
+  PermKeys.branchesView, PermKeys.branchesEdit, PermKeys.branchesDelete, PermKeys.branchesAdd,
+  // Attendance/Leaves granular perms deprecated; approve retained
+  PermKeys.leavesApprove,
         PermKeys.tasksView, PermKeys.tasksEdit, PermKeys.tasksDelete,
+  PermKeys.tasksAdd,
         // Task field-level
         PermKeys.taskEditTitle,
         PermKeys.taskEditNotes,
@@ -107,15 +121,16 @@ class PermissionsService {
     return {
       // Legacy
       PermKeys.home,
-      PermKeys.attendance,
-      PermKeys.leaves,
+  PermKeys.attendance,
+  PermKeys.leaves,
       // Default employee: view-only for a few modules
       PermKeys.homeView,
   PermKeys.projectsView,
   PermKeys.personsView,
   PermKeys.branchesView,
-      PermKeys.attendanceView,
-      PermKeys.leavesView,
+  // Allow employees to view tasks they are assigned (rules also allow assignee access)
+  PermKeys.tasksView,
+  // Attendance & Leaves always accessible (implicit)
     };
   }
 
@@ -123,19 +138,40 @@ class PermissionsService {
   /// If missing or invalid, fallback to the user's role default behavior.
   static Future<Set<String>> fetchAllowedKeysForEmail(String email) async {
     try {
-      if (email.trim().isEmpty) return {};
-      final snap = await _db.collection('userPerms').doc(email).get();
+      final raw = email.trim();
+      if (raw.isEmpty) return {};
+      final key = raw.toLowerCase();
+      final snap = await _db.collection('userPerms').doc(key).get();
       final data = snap.data();
       if (data != null && data['allowed'] is List) {
-        final userSet = List<String>.from(data['allowed']).toSet();
-        // Merge in role defaults to guarantee baseline read access
-        final baseline = await _fallbackByRole(email);
-        return {...baseline, ...userSet};
+  final userSet = List<String>.from(data['allowed']).toSet();
+  // Use the explicit per-email set as the source of truth when present
+  return userSet;
       }
     } catch (_) {
       // ignore and fallback
     }
-    return _fallbackByRole(email);
+    return _fallbackByRole(email.trim());
+  }
+
+  /// Strict per-email fetch: returns null when there is no userPerms doc for the email.
+  /// If the doc exists, returns the exact saved set (can be empty to mean no permissions).
+  static Future<Set<String>?> fetchExplicitKeysForEmailOrNull(String email) async {
+    try {
+      final raw = email.trim();
+      if (raw.isEmpty) return null;
+      final key = raw.toLowerCase();
+      final snap = await _db.collection('userPerms').doc(key).get();
+      if (!snap.exists) return null;
+      final data = snap.data();
+      if (data != null && data['allowed'] is List) {
+        return List<String>.from(data['allowed']).toSet();
+      }
+      // Doc exists but no list present -> treat as empty explicit set
+      return <String>{};
+    } catch (_) {
+      return null;
+    }
   }
 
   static Future<Set<String>> _fallbackByRole(String email) async {
